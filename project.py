@@ -5,6 +5,35 @@ import pickle
 import os.path
 from sklearn import preprocessing
 from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.grid_search import GridSearchCV
+
+class XGBoostClassifier():
+    def __init__(self, **params):
+        self.clf = None
+
+        self.params = params
+
+    def fit(self, X, y):
+        dtrain = xgb.DMatrix(X, y)
+        self.clf = xgb.train(params=self.params, dtrain=dtrain, num_boost_round=self.num_boost_round)
+
+    def predict(self, X):
+        dtest = xgb.DMatrix(X)
+        return self.clf.predict(dtest)
+
+    def score(self, X, y):
+        pred = self.predict(X)
+        return roc_auc_score(y, pred)
+
+    def get_params(self, deep=True):
+        return self.params
+
+    def set_params(self, **params):
+        if 'num_boost_round' in params:
+            self.num_boost_round = params.pop('num_boost_round')
+
+        self.params.update(params)
+        return self
 
 if __name__ == "__main__":
     if not os.path.isfile('data/processed_train.csv') or not os.path.isfile('data/processed_test.csv'):
@@ -46,8 +75,6 @@ if __name__ == "__main__":
 
         # TODO: Feature Analysis??? PCC or MI
 
-        # TODO: Cross validation?????
-
         # Normalization
         scaler = preprocessing.StandardScaler(copy = False).fit(train[train.columns[1:-1]])
         scaler.transform(train[train.columns[1:-1]])
@@ -61,45 +88,44 @@ if __name__ == "__main__":
         train = pd.read_csv('data/processed_train.csv')
         test = pd.read_csv('data/processed_test.csv')
 
-    if not os.path.isfile("classifier.p"):
-        print("Classifier does not exist")
-        train_x = train[train.columns[1:-1]]  # remove ID column and TARGET column
-        train_y = train[train.columns[-1]]
+    train_x = train[train.columns[1:-1]]  # remove ID column and TARGET column
+    train_y = train[train.columns[-1]]
 
-        # TODO: Parameter explaination?????
-        params = {}
-        params["objective"] = "binary:logistic"
-        params["booster"] = "gbtree"
-        params["eval_metric"] = "auc"
-        params["eta"] = 0.0202048
-        params["max_depth"] = 5
-        params["subsample"] = 0.6815
-        params["colsample_bytree"] = 0.701
+    # Cross validation
+    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", silent = 1)
 
-        train_data = xgb.DMatrix(train_x, train_y)
-        print("Start Training")
-        classifier = xgb.train(params = params, dtrain = train_data, num_boost_round = 560, verbose_eval = False)
+    # Parameters to be searched
+    # tuning_parameters = {
+    #     'num_boost_round': [560, 100],
+    #     'eta': [0.0202048, 0.05],
+    #     'max_depth': [5, 6],
+    #     'subsample': [0.6815, 0.9],
+    #     'colsample_bytree': [0.701, 0.9],
+    # }
+    tuning_parameters = {
+        'num_boost_round': [1],
+        'eta': [0.0202048],
+        'max_depth': [5],
+        'subsample': [0.6815],
+        'colsample_bytree': [0.701],
+    }
+    classifiers = GridSearchCV(classifier, tuning_parameters, n_jobs=1, cv=3) # bug if n_jobs > 1 ???
 
-        train_pred = classifier.predict(train_data)
-        train_log_loss = log_loss(train_y, train_pred)
-        train_roc = roc_auc_score(train_y, train_pred)
+    print("Start Training")
+    classifiers.fit(train_x, train_y)
 
-        print(train_log_loss)
-        print(train_roc)
+    best_parameters, score, _ = max(classifiers.grid_scores_, key=lambda x: x[1])
+    print('Best Score:', score)
+    print('Best Parameters:')
+    for param_name in sorted(best_parameters.keys()):
+        print("%s: %r" % (param_name, best_parameters[param_name]))
 
-        pickle.dump(classifier, open("classifier_%f_%f.p" % (train_log_loss, train_roc), "wb"))
-        pickle.dump(classifier, open("classifier.p", "wb"))
-
-        # Save the processed data
-        train.to_csv("data/processed_train_%f_%f.csv" % (train_log_loss, train_roc), index=False)
-        test.to_csv("data/processed_test_%f_%f.csv" % (train_log_loss, train_roc), index=False)
-    else:
-        print("Classifier does exists")
-        classifier = pickle.load(open("classifier.p", "rb" ))
+    # Save the processed data
+    train.to_csv("data/processed_train_%f.csv" % score, index=False)
+    test.to_csv("data/processed_test_%f.csv" % score, index=False)
 
     test_x = test[test.columns[1:]]  # exclude ID column
-    test_data = xgb.DMatrix(test_x)
-    test_y = classifier.predict(test_data)
+    test_y = classifiers.predict(test_x)
 
     submission = pd.DataFrame({"ID": test.ID, "TARGET": test_y})
-    submission.to_csv("test_pred_%f.csv" % train_roc, index=False)
+    submission.to_csv("test_pred_%f.csv" % score, index=False)
