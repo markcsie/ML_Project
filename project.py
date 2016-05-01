@@ -7,7 +7,7 @@ from sklearn import preprocessing
 from sklearn.metrics import roc_auc_score
 from sklearn.grid_search import GridSearchCV
 
-cross_validation = True
+CROSS_VALIDATION = False
 
 class XGBoostClassifier():
     def __init__(self, **params):
@@ -82,8 +82,6 @@ if __name__ == "__main__":
         for col in train.columns[1:-1]:
             test[col].clip(train[col].min, train[col].max)
 
-        # TODO: Feature Analysis??? PCC or MI
-
         # Normalization
         scaler = preprocessing.StandardScaler(copy = False).fit(train[train.columns[1:-1]])
         scaler.transform(train[train.columns[1:-1]])
@@ -97,23 +95,31 @@ if __name__ == "__main__":
         train = pd.read_csv('data/processed_train.csv')
         test = pd.read_csv('data/processed_test.csv')
 
+    # Feature Analysis, pcc TODO: choose the first n features?
+    print("Calculating PCC")
+    c = train.columns[1:-1]
+    pcc = []
+    for i in range(len(c)):
+        p = abs(np.corrcoef(train[c[i]].values, train[train.columns[-1]].values)[0, 1])
+        pcc.append(p)
+
     train_x = train[train.columns[1:-1]]  # remove ID column and TARGET column
     train_y = train[train.columns[-1]]
 
-    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", eta=0.0202048, max_depth=5, subsample = 0.6815, colsample_bytree = 0.701, silent = 0)
+    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", eta=0.02, max_depth=5, subsample = 0.6, colsample_bytree = 0.7, silent = 0)
 
     test_x = test[test.columns[1:]]  # exclude ID column
 
     # Cross validation
-    if cross_validation:
+    if CROSS_VALIDATION:
         print ("Cross Validation")
         # Parameters to be searched
         tuning_parameters = {
-            'num_boost_round': [560],
-            'eta': [0.0202048],
+            'num_boost_round': [1],
+            'eta': [0.02],
             'max_depth': [5],
-            'subsample': [0.6815],
-            'colsample_bytree': [0.701],
+            'subsample': [0.6],
+            'colsample_bytree': [0.7],
         }
         # tuning_parameters = {
         #     'num_boost_round': [560, 100, 250, 500],
@@ -140,10 +146,29 @@ if __name__ == "__main__":
         test_y = classifiers.predict(test_x)
     else:
         print ("No Cross Validation")
-        classifier.fit(train_x, train_y, num_boost_round = 560)
+        classifier.fit(train_x, train_y, num_boost_round = 500)
         score = roc_auc_score(train_y, classifier.predict(train_x))
         test_y = classifier.predict(test_x)
         print('Score:', score)
+
+    # Manual labeling TODO: add more from https://www.kaggle.com/zfturbo/santander-customer-satisfaction/to-the-top-v3/code
+    for i in range(test.shape[0]):
+        row = test.irow(i)
+        nv = row['num_var33'] + row['saldo_medio_var33_ult3'] + row['saldo_medio_var44_hace2'] + row['saldo_medio_var44_hace3'] + row['saldo_medio_var33_ult1'] + row['saldo_medio_var44_ult1']
+        if nv > 0 or \
+            row['var15'] < 23 or \
+            row['saldo_medio_var5_hace2'] > 160000 or \
+            row['saldo_var33'] > 0 or \
+            row['var38'] > 3988596 or \
+            row['var21'] > 7500 or \
+            row['num_var30'] > 9 or \
+            row['num_var13_0'] > 6 or \
+            row['num_var33_0'] > 0 or \
+            row['imp_ent_var16_ult1'] > 51003 or \
+            row['imp_op_var39_comer_ult3'] > 13184 or \
+            row['saldo_medio_var5_ult3'] > 108251:
+
+            test_y[i] = 0
 
     submission = pd.DataFrame({"ID": test.ID, "TARGET": test_y})
     submission.to_csv("test_pred_%f.csv" % score, index=False)
