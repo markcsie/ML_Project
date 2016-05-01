@@ -1,11 +1,13 @@
 import pandas as pd
 import xgboost as xgb
 import numpy as np
-import pickle
 import os.path
+from scipy.sparse import csr_matrix
 from sklearn import preprocessing
-from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.metrics import roc_auc_score
 from sklearn.grid_search import GridSearchCV
+
+cross_validation = True
 
 class XGBoostClassifier():
     def __init__(self, **params):
@@ -13,12 +15,15 @@ class XGBoostClassifier():
 
         self.params = params
 
-    def fit(self, X, y):
-        dtrain = xgb.DMatrix(X, y)
-        self.clf = xgb.train(params=self.params, dtrain=dtrain, num_boost_round=self.num_boost_round)
+    def fit(self, X, y, num_boost_round=None):
+        dtrain = xgb.DMatrix(csr_matrix(X), y)
+        if num_boost_round:
+            self.clf = xgb.train(params=self.params, dtrain=dtrain, num_boost_round=num_boost_round)
+        else:
+            self.clf = xgb.train(params=self.params, dtrain=dtrain, num_boost_round=self.num_boost_round)
 
     def predict(self, X):
-        dtest = xgb.DMatrix(X)
+        dtest = xgb.DMatrix(csr_matrix(X))
         return self.clf.predict(dtest)
 
     def score(self, X, y):
@@ -71,7 +76,11 @@ if __name__ == "__main__":
         test.drop(remove, axis=1, inplace=True)
 
         print("Remaining features %d" % len(train.columns))
-        # TODO: Min Max cut in test data ??
+
+        # Min Max cut in test data
+        print("Min Max cut")
+        for col in train.columns[1:-1]:
+            test[col].clip(train[col].min, train[col].max)
 
         # TODO: Feature Analysis??? PCC or MI
 
@@ -91,41 +100,50 @@ if __name__ == "__main__":
     train_x = train[train.columns[1:-1]]  # remove ID column and TARGET column
     train_y = train[train.columns[-1]]
 
-    # Cross validation
-    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", silent = 1)
-
-    # Parameters to be searched
-    # tuning_parameters = {
-    #     'num_boost_round': [560, 100],
-    #     'eta': [0.0202048, 0.05],
-    #     'max_depth': [5, 6],
-    #     'subsample': [0.6815, 0.9],
-    #     'colsample_bytree': [0.701, 0.9],
-    # }
-    tuning_parameters = {
-        'num_boost_round': [1],
-        'eta': [0.0202048],
-        'max_depth': [5],
-        'subsample': [0.6815],
-        'colsample_bytree': [0.701],
-    }
-    classifiers = GridSearchCV(classifier, tuning_parameters, n_jobs=1, cv=3) # bug if n_jobs > 1 ???
-
-    print("Start Training")
-    classifiers.fit(train_x, train_y)
-
-    best_parameters, score, _ = max(classifiers.grid_scores_, key=lambda x: x[1])
-    print('Best Score:', score)
-    print('Best Parameters:')
-    for param_name in sorted(best_parameters.keys()):
-        print("%s: %r" % (param_name, best_parameters[param_name]))
-
-    # Save the processed data
-    train.to_csv("data/processed_train_%f.csv" % score, index=False)
-    test.to_csv("data/processed_test_%f.csv" % score, index=False)
+    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", eta=0.0202048, max_depth=5, subsample = 0.6815, colsample_bytree = 0.701, silent = 0)
 
     test_x = test[test.columns[1:]]  # exclude ID column
-    test_y = classifiers.predict(test_x)
+
+    # Cross validation
+    if cross_validation:
+        print ("Cross Validation")
+        # Parameters to be searched
+        tuning_parameters = {
+            'num_boost_round': [560],
+            'eta': [0.0202048],
+            'max_depth': [5],
+            'subsample': [0.6815],
+            'colsample_bytree': [0.701],
+        }
+        # tuning_parameters = {
+        #     'num_boost_round': [560, 100, 250, 500],
+        #     'eta': [0.0202048, 0.05, 0.1, 0.3],
+        #     'max_depth': [5, 6, 9, 12],
+        #     'subsample': [0.6815, 0.9, 1.0],
+        #     'colsample_bytree': [0.701, 0.9, 1.0],
+        # }
+        classifiers = GridSearchCV(classifier, tuning_parameters, n_jobs=1, cv=3) # bug if n_jobs > 1 ???
+
+        print("Start Training")
+        classifiers.fit(train_x, train_y)
+
+        best_parameters, score, _ = max(classifiers.grid_scores_, key=lambda x: x[1])
+        print('Best Score:', score)
+        print('Best Parameters:')
+        for param_name in sorted(best_parameters.keys()):
+            print("%s: %r" % (param_name, best_parameters[param_name]))
+
+        # Save the processed data
+        train.to_csv("data/processed_train_%f.csv" % score, index=False)
+        test.to_csv("data/processed_test_%f.csv" % score, index=False)
+
+        test_y = classifiers.predict(test_x)
+    else:
+        print ("No Cross Validation")
+        classifier.fit(train_x, train_y, num_boost_round = 560)
+        score = roc_auc_score(train_y, classifier.predict(train_x))
+        test_y = classifier.predict(test_x)
+        print('Score:', score)
 
     submission = pd.DataFrame({"ID": test.ID, "TARGET": test_y})
     submission.to_csv("test_pred_%f.csv" % score, index=False)
