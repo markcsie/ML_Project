@@ -81,9 +81,13 @@ if __name__ == "__main__":
             test[col].clip(train[col].min, train[col].max)
 
         # Normalization
-        scaler = preprocessing.StandardScaler(copy = False).fit(train[train.columns[1:-1]])
-        scaler.transform(train[train.columns[1:-1]])
-        scaler.transform(test[test.columns[1:]])
+        # scaler = preprocessing.StandardScaler(copy = False).fit(train[train.columns[1:-1]])
+        # scaler.transform(train[train.columns[1:-1]])
+        # scaler.transform(test[test.columns[1:]])
+
+        # Special handling for var38
+        train['var38'] = np.log(train['var38'])
+        test['var38'] = np.log(test['var38'])
 
         # Save the processed data
         train.to_csv("data/processed_train.csv", index=False)
@@ -93,7 +97,7 @@ if __name__ == "__main__":
         train = pd.read_csv('data/processed_train.csv')
         test = pd.read_csv('data/processed_test.csv')
 
-    # Feature Analysis, pcc TODO: choose the first n features?
+    # Feature Analysis, pcc
     print("Calculating PCC")
     c = train.columns[1:-1]
     pcc = []
@@ -103,26 +107,27 @@ if __name__ == "__main__":
 
     print("features %d" % len(pcc))
 
-    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", eta=0.02, max_depth=5, subsample = 0.6, colsample_bytree = 0.7, silent = 1)
-    test_x = test[test.columns[1:]]  # exclude ID column
+    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", eta=0.0202048, max_depth=5, subsample = 0.6815, colsample_bytree = 0.701, silent = 0)
 
     # Cross validation
     if CROSS_VALIDATION:
         best_score = -1
-        for num_features in [100, 150, 200, 250, 300, len(pcc)]:
+        for num_features in [len(pcc)]:
             sorted_pcc_indices = np.add(np.array(pcc).argsort()[::-1][:num_features], 1)
 
             train_x = train[train.columns[sorted_pcc_indices]]  # remove ID column and TARGET column
             train_y = train[train.columns[-1]]
+
+            test_x = test[test.columns[sorted_pcc_indices]]  # exclude ID column
             print("Remaining features %d" % len(sorted_pcc_indices))
             print ("Cross Validation")
             # Parameters to be searched
             tuning_parameters = {
-                'num_boost_round': [500],
-                'eta': [0.02],
+                'num_boost_round': [560],
+                'eta': [0.0202048],
                 'max_depth': [5],
-                'subsample': [0.6],
-                'colsample_bytree': [0.7],
+                'subsample': [0.6815],
+                'colsample_bytree': [0.701],
             }
             classifiers = GridSearchCV(classifier, tuning_parameters, n_jobs=1, cv=3) # bug if n_jobs > 1 ???
 
@@ -142,21 +147,21 @@ if __name__ == "__main__":
         print ("No Cross Validation")
         train_x = train[train.columns[1:-1]]  # remove ID column and TARGET column
         train_y = train[train.columns[-1]]
+        test_x = test[test.columns[1:]]
 
-        classifier.fit(train_x, train_y, num_boost_round = 500)
-        score = roc_auc_score(train_y, classifier.predict(train_x))
+        classifier.fit(train_x, train_y, num_boost_round = 560)
+        best_score = roc_auc_score(train_y, classifier.predict(train_x))
         test_y = classifier.predict(test_x)
-        print('Score:', score)
+        print('Score:', best_score)
 
     # Save the processed data
     train.to_csv("data/processed_train_%f.csv" % best_score, index=False)
     test.to_csv("data/processed_test_%f.csv" % best_score, index=False)
 
-    # Manual labeling TODO: add more from https://www.kaggle.com/zfturbo/santander-customer-satisfaction/to-the-top-v3/code
+    # Manual labeling
     for i in range(test.shape[0]):
         row = test.irow(i)
-        nv = row['num_var33'] + row['saldo_medio_var33_ult3'] + row['saldo_medio_var44_hace2'] + row['saldo_medio_var44_hace3'] + row['saldo_medio_var33_ult1'] + row['saldo_medio_var44_ult1']
-        if nv > 0 or \
+        if row['num_var33'] + row['saldo_medio_var33_ult3'] + row['saldo_medio_var44_hace2'] + row['saldo_medio_var44_hace3'] + row['saldo_medio_var33_ult1'] + row['saldo_medio_var44_ult1'] > 0 or \
             row['var15'] < 23 or \
             row['saldo_medio_var5_hace2'] > 160000 or \
             row['saldo_var33'] > 0 or \
@@ -167,9 +172,18 @@ if __name__ == "__main__":
             row['num_var33_0'] > 0 or \
             row['imp_ent_var16_ult1'] > 51003 or \
             row['imp_op_var39_comer_ult3'] > 13184 or \
-            row['saldo_medio_var5_ult3'] > 108251:
+            row['saldo_medio_var5_ult3'] > 108251 or \
+            row['num_var37_0'] > 45 or \
+            row['saldo_var5'] > 137615 or \
+            row['saldo_var8'] > 60099 or \
+            row['var15'] + row['num_var45_hace3'] + row['num_var45_ult3'] + row['var36'] <= 24 or \
+            row['saldo_var14'] > 19053.78 or \
+            row['saldo_var17'] > 288188.97 or \
+            row['saldo_var26'] > 10381.29 or \
+            row['num_var13_largo_0'] > 3 or \
+            row['imp_op_var40_comer_ult1'] > 3639.87:
 
             test_y[i] = 0
 
     submission = pd.DataFrame({"ID": test.ID, "TARGET": test_y})
-    submission.to_csv("test_pred_%f.csv" % score, index=False)
+    submission.to_csv("test_pred_%f.csv" % best_score, index=False)
