@@ -7,7 +7,7 @@ from sklearn import preprocessing
 from sklearn.metrics import roc_auc_score
 from sklearn.grid_search import GridSearchCV
 
-CROSS_VALIDATION = False
+CROSS_VALIDATION = True
 
 class XGBoostClassifier():
     def __init__(self, **params):
@@ -75,8 +75,6 @@ if __name__ == "__main__":
         train.drop(remove, axis=1, inplace=True)
         test.drop(remove, axis=1, inplace=True)
 
-        print("Remaining features %d" % len(train.columns))
-
         # Min Max cut in test data
         print("Min Max cut")
         for col in train.columns[1:-1]:
@@ -103,53 +101,56 @@ if __name__ == "__main__":
         p = abs(np.corrcoef(train[c[i]].values, train[train.columns[-1]].values)[0, 1])
         pcc.append(p)
 
-    train_x = train[train.columns[1:-1]]  # remove ID column and TARGET column
-    train_y = train[train.columns[-1]]
+    print("features %d" % len(pcc))
 
-    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", eta=0.02, max_depth=5, subsample = 0.6, colsample_bytree = 0.7, silent = 0)
-
+    classifier = XGBoostClassifier(eval_metric="auc", booster="gbtree", objective="binary:logistic", eta=0.02, max_depth=5, subsample = 0.6, colsample_bytree = 0.7, silent = 1)
     test_x = test[test.columns[1:]]  # exclude ID column
 
     # Cross validation
     if CROSS_VALIDATION:
-        print ("Cross Validation")
-        # Parameters to be searched
-        tuning_parameters = {
-            'num_boost_round': [1],
-            'eta': [0.02],
-            'max_depth': [5],
-            'subsample': [0.6],
-            'colsample_bytree': [0.7],
-        }
-        # tuning_parameters = {
-        #     'num_boost_round': [560, 100, 250, 500],
-        #     'eta': [0.0202048, 0.05, 0.1, 0.3],
-        #     'max_depth': [5, 6, 9, 12],
-        #     'subsample': [0.6815, 0.9, 1.0],
-        #     'colsample_bytree': [0.701, 0.9, 1.0],
-        # }
-        classifiers = GridSearchCV(classifier, tuning_parameters, n_jobs=1, cv=3) # bug if n_jobs > 1 ???
+        best_score = -1
+        for num_features in [100, 150, 200, 250, 300, len(pcc)]:
+            sorted_pcc_indices = np.add(np.array(pcc).argsort()[::-1][:num_features], 1)
 
-        print("Start Training")
-        classifiers.fit(train_x, train_y)
+            train_x = train[train.columns[sorted_pcc_indices]]  # remove ID column and TARGET column
+            train_y = train[train.columns[-1]]
+            print("Remaining features %d" % len(sorted_pcc_indices))
+            print ("Cross Validation")
+            # Parameters to be searched
+            tuning_parameters = {
+                'num_boost_round': [500],
+                'eta': [0.02],
+                'max_depth': [5],
+                'subsample': [0.6],
+                'colsample_bytree': [0.7],
+            }
+            classifiers = GridSearchCV(classifier, tuning_parameters, n_jobs=1, cv=3) # bug if n_jobs > 1 ???
 
-        best_parameters, score, _ = max(classifiers.grid_scores_, key=lambda x: x[1])
-        print('Best Score:', score)
-        print('Best Parameters:')
-        for param_name in sorted(best_parameters.keys()):
-            print("%s: %r" % (param_name, best_parameters[param_name]))
+            print("Start Training")
+            classifiers.fit(train_x, train_y)
 
-        # Save the processed data
-        train.to_csv("data/processed_train_%f.csv" % score, index=False)
-        test.to_csv("data/processed_test_%f.csv" % score, index=False)
-
-        test_y = classifiers.predict(test_x)
+            best_parameters, score, _ = max(classifiers.grid_scores_, key=lambda x: x[1])
+            print('Score:', score)
+            if score > best_score:
+                print('Best Score:', score)
+                print('Best Parameters:')
+                for param_name in sorted(best_parameters.keys()):
+                    print("%s: %r" % (param_name, best_parameters[param_name]))
+                best_score = score
+                test_y = classifiers.predict(test_x)
     else:
         print ("No Cross Validation")
+        train_x = train[train.columns[1:-1]]  # remove ID column and TARGET column
+        train_y = train[train.columns[-1]]
+
         classifier.fit(train_x, train_y, num_boost_round = 500)
         score = roc_auc_score(train_y, classifier.predict(train_x))
         test_y = classifier.predict(test_x)
         print('Score:', score)
+
+    # Save the processed data
+    train.to_csv("data/processed_train_%f.csv" % best_score, index=False)
+    test.to_csv("data/processed_test_%f.csv" % best_score, index=False)
 
     # Manual labeling TODO: add more from https://www.kaggle.com/zfturbo/santander-customer-satisfaction/to-the-top-v3/code
     for i in range(test.shape[0]):
