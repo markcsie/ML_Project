@@ -1,3 +1,10 @@
+# Kaggle - Santander Customer Satisfaction Competition
+# https://www.kaggle.com/c/santander-customer-satisfaction
+#
+# Team Name: MLCLASS_SP16_KT
+#     Tampong Yooyen <yooyen@usc.edu>
+#     Kai-Chieh Ma <kaichiem@usc.edu>
+
 import pandas as pd
 import xgboost as xgb
 import numpy as np
@@ -74,6 +81,10 @@ if __name__ == "__main__":
 
         train.drop(remove, axis=1, inplace=True)
         test.drop(remove, axis=1, inplace=True)
+
+        # Remove duplicated rows
+        # train = train.drop_duplicates(subset=train.columns[1:])
+        # train = train.drop_duplicates(subset=train.columns[1:-1], keep=False)
 
         # Min Max cut in test data
         print("Min Max cut")
